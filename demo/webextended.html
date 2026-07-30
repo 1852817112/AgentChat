@@ -22,7 +22,7 @@
 .sess-badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 10px;border-radius:12px;background:var(--card);border:1px solid var(--border)}.sess-badge.on{border-color:var(--cyan);color:var(--cyan)}.sess-badge button{background:none;border:none;color:var(--orange);font-size:11px;cursor:pointer;padding:0;margin-left:4px}.sess-badge button:hover{text-decoration:underline}
 </style></head>
 <body>
-<nav class="topbar"><a href="index.html" class="brand">AgentChat</a><a href="architecture.html">架构</a><a href="webextended.html" class="active">降级链</a><a href="freesubagent.html">并行编排</a><a href="workflow.html">串行管道</a><a href="mcp.html">MCP Server</a><a href="python.html">Python SDK</a><a href="locales.html">多语言</a></nav>
+<nav class="topbar"><a href="index.html" class="brand">AgentChat</a><a href="architecture.html">架构</a><a href="webextended.html" class="active">降级链</a><a href="freesubagent.html">并行编排</a><a href="workflow.html">串行管道</a><a href="session-context.html">会话上下文</a><a href="mcp.html">MCP Server</a><a href="python.html">Python SDK</a><a href="locales.html">多语言</a></nav>
 <div class="container">
 <div class="section"><h2>🔗 AgentChat-OneWeb — 多 Provider 降级链 <span class="tag cyan" id="sessBadge" style="display:none;cursor:default">🔗 会话模式 · 0 轮</span></h2><p>8 个 AI 服务按能力排优先级。Gemini Pro Extended 首选（深度推理），不可用则自动降级到下一个。<strong>开启会话模式后，降级时自动将对话历史传递给 fallback 模型续答。</strong></p>
 <div class="flow" style="margin:16px 0">

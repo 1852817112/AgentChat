@@ -1,0 +1,242 @@
+<!DOCTYPE html><html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>会话上下文传递 — AgentChat</title><link rel="stylesheet" href="shared.css">
+<style>
+.timeline{display:flex;flex-direction:column;gap:0;margin:16px 0;position:relative}
+.timeline::before{content:'';position:absolute;left:19px;top:0;bottom:0;width:2px;background:var(--border)}
+.tl-item{display:flex;gap:12px;padding:10px 0;position:relative}
+.tl-dot{width:16px;height:16px;border-radius:50%;border:3px solid var(--accent);background:var(--bg);z-index:1;flex-shrink:0;margin-top:3px}
+.tl-dot.gem{background:var(--accent)}.tl-dot.fallback{background:var(--orange)}
+.tl-body{flex:1;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;line-height:1.6}
+.tl-body .q{color:var(--accent);margin-bottom:4px}.tl-body .a{color:var(--text)}.tl-body .meta{font-size:11px;color:var(--muted);margin-top:4px}
+.strategy-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+@media(max-width:700px){.strategy-cards{grid-template-columns:1fr}}
+.strat-card{background:var(--card);border:2px solid var(--border);border-radius:12px;padding:20px;transition:.2s}
+.strat-card.active{border-color:var(--green);background:#0d1a0d}
+.strat-card .icon{font-size:32px;margin-bottom:8px}
+.strat-card h3{margin-bottom:6px;font-size:15px}
+.strat-card p{font-size:12px;color:var(--muted);line-height:1.6}
+.strat-card .rule{font-size:11px;color:var(--orange);margin-top:8px;padding:6px 10px;background:var(--bg);border-radius:6px}
+.context-box{background:#0d1117;border:1px solid var(--border);border-radius:10px;padding:14px;font-size:12px;line-height:1.5;max-height:400px;overflow-y:auto;white-space:pre-wrap;font-family:Consolas,'Courier New',monospace;margin:12px 0}
+.context-box .label{color:var(--accent);font-size:11px;margin-bottom:8px;display:block}
+.context-box .ctx-text{color:var(--muted)}
+.context-box .ctx-highlight{color:var(--green)}
+.stat-row{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}
+.stat-mini{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;text-align:center}
+.stat-mini .val{font-size:22px;font-weight:700;color:var(--accent)}
+.stat-mini .lbl{font-size:11px;color:var(--muted);margin-top:2px}
+.input-row2{display:flex;gap:8px;margin-top:12px}
+.input-row2 textarea{flex:1;background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px;font-size:13px;font-family:inherit;resize:none;min-height:40px;outline:none}
+.input-row2 textarea:focus{border-color:var(--accent)}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer}.btn:hover{opacity:.85}.btn:disabled{opacity:.4}
+.btn.small{font-size:11px;padding:4px 12px}
+.btn.danger{background:var(--red)}
+.hidden{display:none}
+</style></head>
+<body>
+<nav class="topbar"><a href="index.html" class="brand">AgentChat</a><a href="architecture.html">架构</a><a href="webextended.html">降级链</a><a href="freesubagent.html">并行编排</a><a href="workflow.html">串行管道</a><a href="session-context.html" class="active">会话上下文</a><a href="mcp.html">MCP Server</a><a href="python.html">Python SDK</a><a href="locales.html">多语言</a></nav>
+<div class="container">
+
+<div class="section">
+  <h1 style="font-size:28px;margin-bottom:6px">🧠 多轮对话上下文传递</h1>
+  <p class="sub" style="color:var(--muted);margin-bottom:20px">降级时自动将对话历史注入 fallback Provider——短对话全量 Q&A，长对话框要 + 最近 2 轮</p>
+</div>
+
+<!-- ═══ 策略对比卡片 ═══ -->
+<div class="section">
+  <h2>📊 双策略对比</h2>
+  <div class="strategy-cards">
+    <div class="strat-card active" id="shortCard">
+      <div class="icon">📋</div>
+      <h3>短对话策略（< 4 轮）</h3>
+      <p>将完整 Q&A 历史拼在 prompt 前面，fallback 模型看到整个对话。每个回答截断到 800 字符。</p>
+      <div class="rule">⚡ 触发条件：轮数 < 4 且总字符数 < 3000</div>
+    </div>
+    <div class="strat-card active" id="longCard">
+      <div class="icon">🗜️</div>
+      <h3>长对话策略（≥ 4 轮）</h3>
+      <p>异步调用 Kimi 生成 150 字摘要存入 .json。fallback 时注入「摘要 + 最近 2 轮原文」。</p>
+      <div class="rule">🔥 触发条件：轮数 ≥ 4 → 自动标记待摘要 → fire-and-forget 调用 Kimi</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 数据流图 ═══ -->
+<div class="section">
+  <h2>🔄 数据流</h2>
+  <pre style="font-size:12px;line-height:1.8">
+用户输入 → demo_server → getContext(sessionId)
+                            │
+                 ┌──────────┴──────────┐
+                 ▼                     ▼
+          短对话 (<4轮)           长对话 (≥4轮)
+         完整 Q&A 注入           摘要 + 最近2轮注入
+                 │                     │
+                 └──────────┬──────────┘
+                            ▼
+              prompt = "[背景...]" + 当前问题
+                            │
+                            ▼
+            AgentChat-OneWeb → 8 Provider 降级链
+                            │
+                            ▼
+                  addTurn(sid, Q, A) → 保存到 .json
+                            │
+              (≥4轮) → generateSummary(sid) → Kimi 异步总结
+  </pre>
+</div>
+
+<!-- ═══ 交互式演示 ═══ -->
+<div class="section">
+  <h2>🎛️ 实时演示</h2>
+  <p style="color:var(--muted);font-size:13px;margin-bottom:12px">选一个 Provider，连续提问。观察策略如何随着轮数增长从「短对话全量」切换为「长对话摘要」。</p>
+
+  <div class="stat-row">
+    <div class="stat-mini"><div class="val" id="turnCount">0</div><div class="lbl">累计轮数</div></div>
+    <div class="stat-mini"><div class="val" id="strategyLabel">等待中</div><div class="lbl">当前策略</div></div>
+    <div class="stat-mini"><div class="val" id="ctxChars">0</div><div class="lbl">上下文字符数</div></div>
+    <div class="stat-mini"><div class="val" id="summaryStatus">—</div><div class="lbl">摘要状态</div></div>
+  </div>
+
+  <div class="input-row2">
+    <textarea id="prompt" rows="1" placeholder="输入第一个问题，比如：介绍一下你自己"></textarea>
+    <select id="provider" style="background:var(--card);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:8px;font-size:13px">
+      <option value="gemini">Gemini Pro</option>
+      <option value="chatgpt" selected>ChatGPT</option>
+      <option value="claude">Claude</option>
+      <option value="qwen">通义千问</option>
+      <option value="kimi">Kimi</option>
+      <option value="deepseek">DeepSeek</option>
+    </select>
+    <button class="btn" id="sendBtn" onclick="doAsk()">发送</button>
+    <button class="btn small danger" id="resetBtn" onclick="doReset()">重置</button>
+  </div>
+
+  <div class="timeline" id="timeline"></div>
+</div>
+
+<!-- ═══ 上下文预览 ═══ -->
+<div class="section">
+  <h2>📝 上下文注入预览 <span style="font-size:12px;color:var(--muted)">（降级时实际拼入 prompt 的内容）</span></h2>
+  <div class="context-box" id="ctxPreview">
+    <span class="label" style="color:var(--muted)">发送一次提问后将在此看到实际注入的上下文字符串</span>
+  </div>
+</div>
+</div>
+
+<script>
+var SID = 'demo_ctx_' + Date.now().toString(36);
+var turnCount = 0;
+
+function doReset(){
+  fetch('/api/sessions/'+ SID, {method:'DELETE'}).catch(function(){});
+  SID = 'demo_ctx_' + Date.now().toString(36);
+  turnCount = 0;
+  document.getElementById('timeline').innerHTML = '';
+  document.getElementById('turnCount').textContent = '0';
+  document.getElementById('strategyLabel').textContent = '等待中';
+  document.getElementById('ctxChars').textContent = '0';
+  document.getElementById('summaryStatus').textContent = '—';
+  document.getElementById('ctxPreview').innerHTML = '<span class="label" style="color:var(--muted)">新会话已创建 · 发送一次提问后将在此看到实际注入的上下文字符串</span>';
+  document.getElementById('shortCard').classList.add('active');
+  document.getElementById('longCard').classList.remove('active');
+}
+
+function esc(s){
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function doAsk(){
+  var p = document.getElementById('prompt').value.trim();
+  if (!p || p.length < 2) { alert('请输入问题'); return; }
+  var prov = document.getElementById('provider').value;
+  var btn = document.getElementById('sendBtn'); btn.disabled = true; btn.textContent = '等待中...';
+
+  var tl = document.getElementById('timeline');
+  tl.innerHTML += '<div class="tl-item"><div class="tl-dot"></div><div class="tl-body"><div class="q">🙋 ' + esc(p) + '</div><div class="meta">⏳ ' + prov + ' 思考中...</div></div></div>';
+  document.getElementById('prompt').value = '';
+  window.scrollTo({top: tl.lastElementChild.offsetTop - 100, behavior: 'smooth'});
+
+  fetch('/api/ask', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({prompt: p, provider: prov, sessionId: SID})
+  })
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    // 去思考中标记
+    var items = tl.querySelectorAll('.tl-item');
+    var last = items[items.length - 1];
+    var meta = last.querySelector('.meta');
+    if (d.success) {
+      last.querySelector('.tl-dot').classList.add('gem');
+      meta.textContent = '✅ ' + d.provider + ' · ' + (d.timeMs/1000).toFixed(0) + 's';
+      last.querySelector('.tl-body').innerHTML += '<div class="a">' + esc(d.response.substring(0, 600)) + '</div>';
+      if (d.chain && d.chain.length > 1) last.querySelector('.tl-body').innerHTML += '<div class="meta" style="color:var(--orange)">降级链: ' + esc(d.chain.join(' → ')) + '</div>';
+      if (d.session && d.session.hasContext) {
+        last.querySelector('.tl-body').innerHTML += '<div class="meta" style="color:var(--cyan)">📎 已传递 ' + turnCount + ' 轮历史给 ' + d.provider + '</div>';
+      }
+      turnCount++;
+    } else {
+      last.querySelector('.tl-dot').classList.add('fallback');
+      meta.textContent = '❌ 失败: ' + esc((d.response||'unknown').substring(0, 100));
+    }
+    btn.disabled = false; btn.textContent = '发送';
+    refreshSession();
+  })
+  .catch(function(e){
+    btn.disabled = false; btn.textContent = '发送';
+    var items = tl.querySelectorAll('.tl-item');
+    var last = items[items.length - 1];
+    last.querySelector('.meta').textContent = '❌ 网络错误: ' + esc(e.message);
+  });
+}
+
+function refreshSession(){
+  fetch('/api/sessions/' + SID)
+  .then(function(r){ return r.json(); })
+  .then(function(d){
+    document.getElementById('turnCount').textContent = d.turns;
+    document.getElementById('strategyLabel').textContent = d.shortStrategy ? '短对话 · 全量注入' : '长对话 · 摘要注入';
+    document.getElementById('ctxChars').textContent = d.context ? d.context.length : 0;
+    document.getElementById('summaryStatus').textContent = d.hasSummary ? '✅ 已生成' : (d.summaryPending ? '⏳ 生成中' : '无摘要');
+    if (!d.shortStrategy) {
+      document.getElementById('shortCard').classList.remove('active');
+      document.getElementById('longCard').classList.add('active');
+    }
+
+    // 上下文预览
+    var ctxBox = document.getElementById('ctxPreview');
+    if (d.context) {
+      var preview = esc(d.context).replace(/\[对话背景/g, '<span class="ctx-highlight">[对话背景</span>')
+        .replace(/\[对话摘要/g, '<span class="ctx-highlight">[对话摘要</span>')
+        .replace(/\[最近/g, '<span class="ctx-highlight">[最近')
+        .replace(/\[背景结束/g, '<span class="ctx-highlight">[背景结束</span>')
+        .replace(/用户:/g, '<span style="color:var(--accent)">用户:</span>')
+        .replace(/AI:/g, '<span style="color:var(--green)">AI:</span>')
+        .replace(/当前问题:/g, '<span style="color:var(--orange)">当前问题:</span>');
+      ctxBox.innerHTML = '<span class="label">🔽 降级时拼入 fallback prompt 的完整内容（' + (d.shortStrategy ? '短对话全量' : '长对话摘要') + '策略）</span><div class="ctx-text">' + preview + '</div>';
+    } else {
+      ctxBox.innerHTML = '<span class="label" style="color:var(--muted)">发送一次提问后将在此看到实际注入的上下文字符串</span>';
+    }
+
+    // 对话历史预览
+    if (d.turnsPreview && d.turnsPreview.length > 0) {
+      var previews = d.turnsPreview.map(function(t){
+        return '<div class="tl-item"><div class="tl-dot gem"></div><div class="tl-body"><div class="q">🙋 ' + esc(t.q) + '</div><div class="a" style="font-size:12px">' + esc(t.a) + '</div></div></div>';
+      }).join('');
+      var tl = document.getElementById('timeline');
+      // 只更新 summary 状态，不重建 timeline
+    }
+  })
+  .catch(function(){});
+}
+
+// 初始加载
+fetch('/api/health').then(function(r){return r.json()}).then(function(d){
+  if (d.cdp !== 'online') document.getElementById('sendBtn').disabled = true;
+}).catch(function(){});
+</script>
+<footer>AgentChat · 会话上下文传递 · 短对话全量 + 长对话框要</footer></body></html>

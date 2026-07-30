@@ -584,6 +584,40 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // API: GET /api/sessions/{id} — 会话详情（含对话历史 + 上下文预览）
+    if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/') && url.pathname.split('/').length === 3) {
+        const sessionId = url.pathname.split('/api/sessions/')[1];
+        const data = getSessionData(sessionId);
+        if (!data || !data.turns || data.turns.length === 0) {
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ id: sessionId, turns: [], context: null, strategy: null }));
+            return;
+        }
+        const shortStrategy = data.turns.length < 4;
+        const ctx = getContext(sessionId);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+            id: sessionId,
+            turns: data.turns.length,
+            shortStrategy,
+            strategy: shortStrategy ? '短对话策略：完整 Q&A 全量注入' : '长对话策略：摘要 + 最近 2 轮',
+            hasSummary: !!data.summary,
+            summary: data.summary || null,
+            summaryPending: !!data._summaryPending,
+            createdAt: data.createdAt,
+            updatedAt: data.updatedAt,
+            context: ctx ? ctx.substring(0, 5000) : null,
+            turnsPreview: shortStrategy ? data.turns.map(t => ({
+                q: (t.question||'').substring(0, 300),
+                a: (t.answer||'').substring(0, 300),
+            })) : data.turns.slice(-3).map(t => ({
+                q: (t.question||'').substring(0, 300),
+                a: (t.answer||'').substring(0, 300),
+            })),
+        }));
+        return;
+    }
+
     // Static: serve from demo/ directory
     let demoDir = path.join(PROJECT_DIR, 'demo');
     let filePath = path.join(demoDir, 'index.html');
